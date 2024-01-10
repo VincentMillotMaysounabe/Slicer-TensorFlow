@@ -11,7 +11,16 @@ The module enables the user to :
  Only the model path is saved by the module.
 
 ## 2. Installation
-You can install the extension by downloading the repository and drag & drop the folder in slicer. The extension will be found at Segmentation\TFSegmentation.
+Requirements : this extension as been developped and tested with Slicer 5.6.1
+
+To install the extension :
+ - Download the repository in .zip on this page
+ - Extract the all files from Slicer-TensorFlow.zip
+ - Double-click on the extracted folder "Slicer-TensorFlow"
+ - Drag & drop the folder "Slicer-TensorFlow" into Slicer. Warning : the droped folder should directly contain the extension.
+ - A slicer window "Select a reader" should appear. Make sure "Add Python scripted modules to the application" is selected and press ok.
+ - Slicer should asks you if you want to load the module "TFSegmentation", press "Yes".
+ - The extension is installed ! It will be found in the menu Segmentation\TFSegmentation.
 
 ## 3. Menu
 The extension menu is divided into 5 parts.<br />
