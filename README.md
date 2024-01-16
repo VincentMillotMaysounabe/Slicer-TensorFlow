@@ -22,7 +22,9 @@ To install the extension :
  - Slicer should asks you if you want to load the module "TFSegmentation", press "Yes".
  - The extension is installed ! It will be found in the menu Segmentation\TFSegmentation.
 
-## 3. Menu
+## 3. Quick Overview
+_To go deeper into what this extension can do, please report to the Examples folder where you can learn step by step how to use your first tensorflow model with a prostate segmentation model_
+
 The extension menu is divided into 5 parts.<br />
 ![extensionMenu](https://github.com/VincentMillotMaysounabe/Slicer-TensorFlow/assets/114880539/e6a991e0-1084-47a4-9321-16e04db945a2)
 
