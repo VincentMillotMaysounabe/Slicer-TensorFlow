@@ -21,11 +21,11 @@ You can click on "install" button to download and install the latest TensorFlow 
 
 _Please note this step will not be required in further usage of this extension as TensorFlow will already be installed into Slicer._
 
-## 3. Chosing the inputs
+## 3. Choosing the inputs
 Input Volume panel should be used to select the prostate MRI to be segmented. If the volume is already loaded into slicer as a node, it should appear as shown bellow with example 1:<br />
 <img width="434" alt="image" src="https://github.com/VincentMillotMaysounabe/Slicer-TensorFlow/assets/114880539/fe3c2427-a214-46d9-969c-9502d99e93bd"><br />
 
-## 4. Addind model to list
+## 4. Adding model to list
 Right after the extension installation, the model list is empty. To add a path to the model list, click on "..." button in the "Model list options" panel. Select the model to segment with (should be a .h5 or a .keras file). Here you can use the available model "ProstateSegmentation" that can be found in Examples\model folder.
 
 One selected, the path should appear as shown bellow. Simply click on "Add model" to add the selected model to the list.<br />

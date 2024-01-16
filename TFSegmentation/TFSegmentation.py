@@ -13,7 +13,7 @@ from slicer.util import VTKObservationMixin
 
 def CheckForDependencies():
     try :
-        import tensorflow as tf
+        from tensorflow.keras.models import load_model
         return True
     except:
         return False
@@ -179,8 +179,8 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.applyButton.connect('clicked(bool)', self.onApplyButton)
 
         try:
-            import tensorflow as tf
-            self.ui.versionLabel.setText(tf.__version__+'  ')
+            from tensorflow import __version__ as TFversion
+            self.ui.versionLabel.setText(TFversion+'  ')
             self.ui.installButton.setEnabled(False)
         except:
             None
@@ -312,22 +312,24 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             #Loading is in safe mode and compile model with substitute optimizer, loss and metrics to    #
             #use the model using the less informations possible                                          #
             ##############################################################################################
-            import tensorflow as tf
+            # import tensorflow as tf
+            from tensorflow.keras.models import load_model
+            from tensorflow.keras.losses import BinaryCrossentropy
 
             # Load TF model
             logging.info('Loading model...')
             with slicer.util.tryWithErrorDisplay(message='Model loading failed', show=True, waitCursor=True):
-                model = tf.keras.models.load_model(self.userModels[self.ui.modelComboBox.currentIndex], compile=False)
+                model = load_model(self.userModels[self.ui.modelComboBox.currentIndex], compile=False)
 
             # compile model with substitute optimizer, loss and metrics.
-            model.compile(optimizer='Adam', loss=tf.keras.losses.BinaryCrossentropy(), metrics=['accuracy'])
+            model.compile(optimizer='Adam', loss=BinaryCrossentropy(), metrics=['accuracy'])
 
             # Compute output
             logging.info("Start Computing")
             with slicer.util.tryWithErrorDisplay(message='Prediction failed', show=True, waitCursor=True):
                 typeChoice = self.ui.typeComboBox.currentText
                 if typeChoice == "2D":
-                    self.logic.process(self.ui.inputSelector.currentNode(), model,
+                    self.logic.process2D(self.ui.inputSelector.currentNode(), model,
                                    self.ui.resizingCheckBox.isChecked(), self.ui.rescalingCheckBox.isChecked())
                 if typeChoice == "2.5D":
                     None
@@ -340,7 +342,7 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         Add a model to the model list
         """
         if self.ui.modelPathLineEdit.currentPath == '':
-            print('Error : No model selected !')
+            slicer.util.errorDisplay("Selected model path is invalid")
             return
 
         # Check if path already exist in file
@@ -351,10 +353,13 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         # Add model to list
         self.logic.addModelPath(self.resourcePath('UserModels.txt'), self.ui.modelPathLineEdit.currentPath)
-        # Add model to comboBox
+        # Add model to comboBox & set combobox to this item
         self.ui.modelComboBox.addItem(self.ui.modelPathLineEdit.currentPath.split('/')[-1].strip('\n'))
+        self.ui.modelComboBox.setCurrentText(self.ui.modelPathLineEdit.currentPath.split('/')[-1].strip('\n'))
         # Add model to userModels parameter
         self.userModels.append(self.ui.modelPathLineEdit.currentPath)
+        # inform user model was correctly added
+        slicer.util.infoDisplay("The model was correctly added to list", windowTitle="Model added")
 
     def onDeleteButton(self):
         if slicer.util.confirmOkCancelDisplay("Delete this model from list ?"):
@@ -369,17 +374,19 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             # Delete model from widget
             self.ui.modelComboBox.removeItem(index)
 
+            # Inform user the model as beed deleted
+            slicer.util.infoDisplay("The model was removed from list", windowTitle="Model removed")
+
     def onInstallButton(self):
         import pip
         if hasattr(pip, 'main'):
             pip.main(['install', 'tensorflow'])
         else:
             pip._internal.main(['install', 'tensorflow'])
-        try :
+        with slicer.util.tryWithErrorDisplay("Failed to compute results.", waitCursor=True):
             import tensorflow as tf
             self.ui.versionLabel.setText(tf.__version__+'  ')
-        except :
-            print("failed to install tensorflow")
+            slicer.util.infoDisplay("TensorFlow was succesfully installed", windowTitle="TensorFlow installation")
 
     def onTypeChange(self):
         choice = self.ui.typeComboBox.currentText
@@ -450,7 +457,7 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
                     f.write(m)
         None
 
-    def process(self, inputVolume, model, autoResize=True, autoRescale=True):
+    def process2D(self, inputVolume, model, autoResize=True, autoRescale=True):
         """
         Run the processing algorithm.
         Can be used without GUI widget.
@@ -481,6 +488,7 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         InputVolumeShape = InputVolumeAsArray.shape
 
         # Pre-processing
+        """
         import tensorflow as tf
         resizeProcess = tf.keras.layers.Resizing(model_input_shape[0], model_input_shape[1])
         preprocessedInputArray = []
@@ -495,14 +503,15 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
             if autoRescale: rescaledImg = self.autoRescaleImg(resizedImg)
             else: rescaledImg =resizedImg
 
-            preprocessedInputArray.append(rescaledImg)
-        preprocessedInputArray = np.array(preprocessedInputArray)
+            preprocessedInputArray.append(rescaledImg)"""
+        preprocessedInputArray = self.preProcessing(inputVolume, model_input_shape, autoResize, autoRescale)
 
         # Process data
         result = model.predict(preprocessedInputArray)
 
         # Making sure the output as the same shape as input
-        resizeOutputProcess = tf.keras.layers.Resizing(InputVolumeShape[1], InputVolumeShape[2])
+        from tensorflow.keras.layers import Resizing
+        resizeOutputProcess = Resizing(InputVolumeShape[1], InputVolumeShape[2])
         resultResized = []
         for img in result:
             resultResized.append(resizeOutputProcess(img))
@@ -530,6 +539,48 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         import tensorflow as tf
         rescale = tf.keras.layers.Rescaling(1. / tf.reduce_max(input_img))
         return rescale(input_img)
+
+    def process3D(self, inputVolume, model, autoResize=True, autoRescale=True):
+        # Volume et model input doivent être exactement de la même dimension car sinon impossible.
+
+        # Getting data array
+        name = inputVolume.GetName()
+        InputVolumeAsArray = slicer.util.array(name)
+        InputVolumeShape = InputVolumeAsArray.shape
+
+        model_input_shape = model.inputs[0].shape.as_list()[1:] #first dim is None
+
+        #Adapter quand même sur les deux dernières dimensions ? -> pourrait quand même être utile
+        #-> Oui on est pas là pour faire les choses à moitié
+        if InputVolumeShape != model_input_shape:
+            raise ValueError("Input size and model input size are not compatible.")
+
+        return None
+
+    def preProcessing(self, inputVolume, model_2D_input_size,  autoResize=True, autoRescale=True):
+        # Getting data array
+        name = inputVolume.GetName()
+        InputVolumeAsArray = slicer.util.array(name)
+
+        # Pre-processing
+        from tensorflow.keras.layers import Resizing
+        resizeProcess = Resizing(model_2D_input_size[0], model_2D_input_size[1])
+        preprocessedInputArray = []
+        for img in InputVolumeAsArray:
+            expandedImg = np.expand_dims(img, axis=2)
+
+            # Resizing array if selected
+            if autoResize: resizedImg = resizeProcess(expandedImg)
+            else: resizedImg = expandedImg
+
+            # Rescaling values if selected
+            if autoRescale: rescaledImg = self.autoRescaleImg(resizedImg)
+            else: rescaledImg =resizedImg
+
+            preprocessedInputArray.append(rescaledImg)
+        preprocessedInputArray = np.array(preprocessedInputArray)
+
+        return preprocessedInputArray
 
     def processSegmentTRANSElements(self, inputVolume):
         """
