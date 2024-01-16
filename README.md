@@ -25,7 +25,7 @@ To install the extension :
 ## 3. Quick Overview
 _To go deeper into what this extension can do, please report to the Examples folder where you can learn step by step how to use your first tensorflow model with a prostate segmentation model_
 
-The extension menu is divided into 5 parts.<br />
+The extension menu is divided into 5 panels.<br />
 ![extensionMenu](https://github.com/VincentMillotMaysounabe/Slicer-TensorFlow/assets/114880539/e6a991e0-1084-47a4-9321-16e04db945a2)
 
 1 - Tensorflow version : checks if tensorflow is available on the device. If not, the user can click "install" to pip install tensorflow. When a tensorflow is discovered, the version is displayed and the install button is unenabled.<br /><br />
