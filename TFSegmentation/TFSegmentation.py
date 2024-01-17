@@ -312,28 +312,32 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             #Loading is in safe mode and compile model with substitute optimizer, loss and metrics to    #
             #use the model using the less informations possible                                          #
             ##############################################################################################
-            # import tensorflow as tf
-            from tensorflow.keras.models import load_model
-            from tensorflow.keras.losses import BinaryCrossentropy
 
             # Load TF model
-            logging.info('Loading model...')
             with slicer.util.tryWithErrorDisplay(message='Model loading failed', show=True, waitCursor=True):
-                model = load_model(self.userModels[self.ui.modelComboBox.currentIndex], compile=False)
-
-            # compile model with substitute optimizer, loss and metrics.
-            model.compile(optimizer='Adam', loss=BinaryCrossentropy(), metrics=['accuracy'])
+                self.logic.loadModel(self.userModels[self.ui.modelComboBox.currentIndex])
 
             # Compute output
             logging.info("Start Computing")
             with slicer.util.tryWithErrorDisplay(message='Prediction failed', show=True, waitCursor=True):
-                typeChoice = self.ui.typeComboBox.currentText
-                if typeChoice == "2D":
-                    self.logic.process2D(self.ui.inputSelector.currentNode(), model,
+                idealProcessingMethod = self.logic.getIdealProcessingMethod()
+                ProcessingChoice = self.ui.typeComboBox.currentText
+
+                if idealProcessingMethod != ProcessingChoice:
+                    slicer.util.infoDisplay(
+                        "Input type error : the input will be process using the " + idealProcessingMethod +
+                        " method because of the detected input and output dimensions",
+                        WindowTitle="Processing information")
+                    self.ui.typeComboBox.setCurrentText(idealProcessingMethod)
+
+                if idealProcessingMethod == "2D":
+                    self.logic.process2D(self.ui.inputSelector.currentNode(),
                                    self.ui.resizingCheckBox.isChecked(), self.ui.rescalingCheckBox.isChecked())
-                if typeChoice == "2.5D":
+
+                if idealProcessingMethod == "2.5D":
                     None
-                if typeChoice == "3D":
+
+                if idealProcessingMethod == "3D":
                     None
 
             ###############################################################################################
@@ -455,9 +459,20 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
             for m in model_list:
                 if not m.endswith(model):
                     f.write(m)
-        None
 
-    def process2D(self, inputVolume, model, autoResize=True, autoRescale=True):
+    def loadModel(self, modelPath):
+        # import tensorflow as tf
+        from tensorflow.keras.models import load_model
+        from tensorflow.keras.losses import BinaryCrossentropy
+
+        # Load TF model
+        logging.info('Loading model...')
+        self.model = load_model(modelPath, compile=False)
+
+        # compile model with substitute optimizer, loss and metrics.
+        self.model.compile(optimizer='Adam', loss=BinaryCrossentropy(), metrics=['accuracy'])
+
+    def process2D(self, inputVolume, autoResize=True, autoRescale=True):
         """
         Run the processing algorithm.
         Can be used without GUI widget.
@@ -469,18 +484,14 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         #Developper = VM Description = Processing input volume with TF model #
         ######################################################################
 
-        # VM Note = Should make sure the model is correct.
+        # making sure inputs are correct
         if not inputVolume:
             raise ValueError("Input volume is invalid")
 
-        if not model:
+        if not self.model:
             raise ValueError("Model is invalid")
 
-        model_input_shape = model.inputs[0].shape.as_list()[1:] #first dim is None
-
-        import time
-        startTime = time.time()
-        logging.info('Processing started')
+        InputModelShape = self.model.inputs[0].shape.as_list()[1:] #first dim is None
 
         # Getting data array
         name = inputVolume.GetName()
@@ -488,29 +499,14 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         InputVolumeShape = InputVolumeAsArray.shape
 
         # Pre-processing
-        """
-        import tensorflow as tf
-        resizeProcess = tf.keras.layers.Resizing(model_input_shape[0], model_input_shape[1])
-        preprocessedInputArray = []
-        for img in InputVolumeAsArray:
-            expandedImg = np.expand_dims(img, axis=2)
+        preprocessedInputArray = self.preProcessing(inputVolume, InputModelShape, autoResize, autoRescale)
 
-            # Resizing array if selected
-            if autoResize: resizedImg = resizeProcess(expandedImg)
-            else: resizedImg = expandedImg
-
-            # Rescaling values if selected
-            if autoRescale: rescaledImg = self.autoRescaleImg(resizedImg)
-            else: rescaledImg =resizedImg
-
-            preprocessedInputArray.append(rescaledImg)"""
-        preprocessedInputArray = self.preProcessing(inputVolume, model_input_shape, autoResize, autoRescale)
-
-        # Process data
-        result = model.predict(preprocessedInputArray)
+        # Process data using model
+        result = self.model.predict(preprocessedInputArray)
 
         # Making sure the output as the same shape as input
         from tensorflow.keras.layers import Resizing
+
         resizeOutputProcess = Resizing(InputVolumeShape[1], InputVolumeShape[2])
         resultResized = []
         for img in result:
@@ -532,8 +528,7 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         slicer.util.updateSegmentBinaryLabelmapFromArray(result, segmentationNode, "Model Segmentation", referenceVolumeNode = inputVolume)
         segmentationNode.SetDisplayVisibility(True)
 
-        stopTime = time.time()
-        logging.info(f'Processing completed in {stopTime-startTime:.2f} seconds')
+        logging.info("Process ended successfully")
 
     def autoRescaleImg(self, input_img):
         import tensorflow as tf
@@ -582,48 +577,23 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
 
         return preprocessedInputArray
 
-    def processSegmentTRANSElements(self, inputVolume):
+    def getIdealProcessingMethod(self):
         """
-        Run the processing algorithm.
-        Can be used without GUI widget.
-        :param inputVolume: volume to be thresholded
-        :param outputVolume: thresholding result
-        :param imageThreshold: values above/below this threshold will be set to 0
-        :param invert: if True then values above the threshold will be set to 0, otherwise values below are set to 0
-        :param showResult: show output volume in slice viewers
+        returns a label containing the ideal processing method based on volume input shape and model input shape
         """
-        if not inputVolume :
-            raise ValueError("Input or output volume is invalid")
+        InputModelShape = self.model.inputs[0].shape.as_list()[1:] #first dim is None
+        OutputModelShape = self.model.outputs[0].shape.as_list()[1:] #first dim is None
 
-        import time
-        startTime = time.time()
-        logging.info('Processing started')
+        if len(InputModelShape) == 3:
+            return "2D"
 
-        name = inputVolume.GetName()
-        if name.startswith('TRANS'):
-            # Getting data array
-            arr = slicer.util.array(name)
+        if len(InputModelShape) == 4:
+            return "3D"
 
-            # Filtering for yellow
-            bin_map = arr[:, :, :, 0] > arr[:, :, :, 2]  # extract all added elements
-            bin_map = bin_map * (arr[:, :, :, 1] > 150)
-            bin_map = bin_map * (arr[:, :, :, 1] > 150)
-            bin_map = bin_map * (arr[:, :, :, 2] < 100)
-            bin_map = np.array(bin_map, dtype=int)
+        if len(InputModelShape) == 4 and len(OutputModelShape) == 3:
+            return "2.5D"
 
-        # Create segmentation node
-        segmentationNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode")
-        segmentationNode.SetName(name+" segmentation")
-
-        # Create new segment
-        addedSegmentID = segmentationNode.GetSegmentation().AddEmptySegment("Firing Zone")
-        slicer.util.updateSegmentBinaryLabelmapFromArray(bin_map, segmentationNode, "Firing Zone", referenceVolumeNode = inputVolume)
-        segmentationNode.SetDisplayVisibility(True)
-
-        stopTime = time.time()
-        logging.info(f'Processing completed in {stopTime-startTime:.2f} seconds')
-
-
+        return None
 #
 # TFSegmentationTest
 #
