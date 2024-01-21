@@ -167,6 +167,7 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.installButton.connect("clicked(bool)", self.onInstallButton)
         self.ui.typeComboBox.currentIndexChanged.connect(self.onTypeChange)
         self.ui.modelComboBox.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
+        self.ui.rescalingCheckBox.connect("clicked(bool)", self.onRescaleChange)
         #self.ui.modelComboBox.setNodeTypes('vtkMRMLTextNode')
 
         if self.userModels :
@@ -332,7 +333,13 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
                 if idealProcessingMethod == "2D":
                     self.logic.process2D(self.ui.inputSelector.currentNode(),
-                                   self.ui.resizingCheckBox.isChecked(), self.ui.rescalingCheckBox.isChecked())
+                                         self.ui.resizingCheckBox.isChecked(), self.ui.rescalingCheckBox.isChecked(),
+                                         self.ui.rescalingComboBox.currentText)
+
+                if idealProcessingMethod == "2.5D RVB":
+                    self.logic.process25Drvb(self.ui.inputSelector.currentNode(),
+                                   self.ui.resizingCheckBox.isChecked(), self.ui.rescalingCheckBox.isChecked(),
+                                         self.ui.rescalingComboBox.currentText)
 
                 if idealProcessingMethod == "2.5D":
                     None
@@ -401,6 +408,11 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                                           " as the model input")
         if choice == "3D":
             self.ui.typeDescLabel.setText("The segmentation will be processed with the full volume as input")
+    def onRescaleChange(self):
+        if self.ui.rescalingCheckBox.isChecked():
+            self.ui.rescalingComboBox.setEnabled(True)
+        else:
+            self.ui.rescalingComboBox.setEnabled(False)
 
 #
 # TFSegmentationLogic
@@ -472,7 +484,7 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         # compile model with substitute optimizer, loss and metrics.
         self.model.compile(optimizer='Adam', loss=BinaryCrossentropy(), metrics=['accuracy'])
 
-    def process2D(self, inputVolume, autoResize=True, autoRescale=True):
+    def process2D(self, inputVolume, autoResize=True, autoRescale=True, rescaleScale=None):
         """
         Run the processing algorithm.
         Can be used without GUI widget.
@@ -499,7 +511,8 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         InputVolumeShape = InputVolumeAsArray.shape
 
         # Pre-processing
-        preprocessedInputArray = self.preProcessing(inputVolume, InputModelShape, autoResize, autoRescale)
+        preprocessedInputArray = self.preProcessing(inputVolume, InputModelShape, autoResize, autoRescale,
+                                                    rescaleScale)
 
         # Process data using model
         result = self.model.predict(preprocessedInputArray)
@@ -530,12 +543,17 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
 
         logging.info("Process ended successfully")
 
-    def autoRescaleImg(self, input_img):
+    def autoRescaleImg(self, input_img, scale):
         import tensorflow as tf
-        rescale = tf.keras.layers.Rescaling(1. / tf.reduce_max(input_img))
-        return rescale(input_img)
+        if scale is None or scale.startswith("[0,1]"):
+            rescale = tf.keras.layers.Rescaling(1. / tf.reduce_max(input_img))
+            return rescale(input_img)
+        elif scale.startswith("[-1,1]"):
+            rescale = tf.keras.layers.Rescaling(2. / tf.reduce_max(input_img), offset=-1)
+            return rescale(input_img)
 
-    def process3D(self, inputVolume, model, autoResize=True, autoRescale=True):
+
+    def process3D(self, inputVolume, model, autoResize=True, autoRescale=True, rescaleScale=None):
         # Volume et model input doivent être exactement de la même dimension car sinon impossible.
 
         # Getting data array
@@ -552,7 +570,75 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
 
         return None
 
-    def preProcessing(self, inputVolume, model_2D_input_size,  autoResize=True, autoRescale=True):
+    def process25Drvb(self, inputVolume, autoResize=True, autoRescale=True, rescaleScale=None):
+        """
+        Run the processing algorithm.
+        Can be used without GUI widget.
+        :param inputVolume: volume to be thresholded
+        :param model: tensorFlow model to segment input volume with
+        """
+
+        ######################################################################
+        # Developper = VM Description = Processing input volume with TF model #
+        ######################################################################
+
+        # making sure inputs are correct
+        if not inputVolume:
+            raise ValueError("Input volume is invalid")
+
+        if not self.model:
+            raise ValueError("Model is invalid")
+
+        InputModelShape = self.model.inputs[0].shape.as_list()[1:]  # first dim is None
+
+        # Getting data array
+        name = inputVolume.GetName()
+        InputVolumeAsArray = slicer.util.array(name)
+        InputVolumeShape = InputVolumeAsArray.shape
+
+        # Pre-processing
+        preprocessedInputArray = self.preProcessing(inputVolume, InputModelShape, autoResize, autoRescale, rescaleScale)
+
+        # Converting Grayscale to RVB
+        inputs = np.zeros((len(preprocessedInputArray), InputModelShape[0], InputModelShape[1], 3))
+        for j in range(len(preprocessedInputArray)):
+            inputs[j, :, :, 1] = np.squeeze(preprocessedInputArray[j])
+            if j != 0:
+                inputs[j, :, :, 0] = np.squeeze(preprocessedInputArray[j - 1])
+            if j != (len(preprocessedInputArray) - 1):
+                inputs[j, :, :, 2] = np.squeeze(preprocessedInputArray[j + 1])
+
+        # Process data using model
+        result = self.model.predict(inputs)
+
+        # Making sure the output as the same shape as input
+        from tensorflow.keras.layers import Resizing
+
+        resizeOutputProcess = Resizing(InputVolumeShape[1], InputVolumeShape[2])
+        resultResized = []
+        for img in result:
+            resultResized.append(resizeOutputProcess(img))
+        result = np.array(resultResized)
+
+        # making sure it is binary
+        # Note for later : should take into account more than 2 labels
+        result = np.squeeze(result, axis=3)  # Always needed ? => ,3 images ?
+        result = np.array(result > 0.5, dtype=float)
+
+        # Create segmentation node
+        # Note for later : segmentation node should be the selected one
+        segmentationNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode")
+        segmentationNode.SetName(name + " segmentation")
+
+        # Create new segment
+        addedSegmentID = segmentationNode.GetSegmentation().AddEmptySegment("Model Segmentation")
+        slicer.util.updateSegmentBinaryLabelmapFromArray(result, segmentationNode, "Model Segmentation",
+                                                         referenceVolumeNode=inputVolume)
+        segmentationNode.SetDisplayVisibility(True)
+
+        logging.info("Process ended successfully")
+
+    def preProcessing(self, inputVolume, model_2D_input_size,  autoResize=True, autoRescale=True, rescaleScale=None):
         # Getting data array
         name = inputVolume.GetName()
         InputVolumeAsArray = slicer.util.array(name)
@@ -569,8 +655,8 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
             else: resizedImg = expandedImg
 
             # Rescaling values if selected
-            if autoRescale: rescaledImg = self.autoRescaleImg(resizedImg)
-            else: rescaledImg =resizedImg
+            if autoRescale: rescaledImg = self.autoRescaleImg(resizedImg, rescaleScale)
+            else: rescaledImg = resizedImg
 
             preprocessedInputArray.append(rescaledImg)
         preprocessedInputArray = np.array(preprocessedInputArray)
@@ -585,7 +671,11 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         OutputModelShape = self.model.outputs[0].shape.as_list()[1:] #first dim is None
 
         if len(InputModelShape) == 3:
-            return "2D"
+            if InputModelShape[-1] == 3:
+                return "2.5D RVB"
+            else:
+                return "2D"
+
 
         if len(InputModelShape) == 4:
             return "3D"

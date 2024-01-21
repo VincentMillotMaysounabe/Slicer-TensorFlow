@@ -1,1 +1,2 @@
-
+C:/Users/mayso/Desktop/Prostate segmentation/25d_mobileNetv2_model_chkpt1.h5
+C:/Users/mayso/Desktop/Prostate segmentation/prostateSegmentation.h5
