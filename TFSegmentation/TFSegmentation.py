@@ -10,6 +10,8 @@ import numpy as np
 import slicer
 from slicer.ScriptedLoadableModule import *
 from slicer.util import VTKObservationMixin
+import requests
+from qt import QWidget, QLineEdit, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout,QCursor,Qt
 
 def CheckForDependencies():
     try :
@@ -115,6 +117,7 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.logic = None
         self._parameterNode = None
         self._updatingGUIFromParameterNode = False
+        self._user_authentication = None
 
         ########################################################################
         # Developer = VM # Description = Creates userModels variable, list of  #
@@ -168,6 +171,7 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self.ui.typeComboBox.currentIndexChanged.connect(self.onTypeChange)
         self.ui.modelComboBox.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
         self.ui.rescalingCheckBox.connect("clicked(bool)", self.onRescaleChange)
+        self.ui.localComboBox.currentIndexChanged.connect(self.onLocalChange)
         #self.ui.modelComboBox.setNodeTypes('vtkMRMLTextNode')
 
         if self.userModels :
@@ -336,7 +340,7 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                                          self.ui.resizingCheckBox.isChecked(), self.ui.rescalingCheckBox.isChecked(),
                                          self.ui.rescalingComboBox.currentText)
 
-                if idealProcessingMethod == "2.5D RVB":
+                if idealProcessingMethod == "2.5D RGB":
                     self.logic.process25Drvb(self.ui.inputSelector.currentNode(),
                                    self.ui.resizingCheckBox.isChecked(), self.ui.rescalingCheckBox.isChecked(),
                                          self.ui.rescalingComboBox.currentText)
@@ -408,12 +412,110 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
                                           " as the model input")
         if choice == "3D":
             self.ui.typeDescLabel.setText("The segmentation will be processed with the full volume as input")
+
+        if choice == "2.5D RGB":
+            self.ui.typeDescLabel.setText("The segmentation will be processed slice by slice using a stack of 3 images"+
+                                          " forming a RGB image as model input")
+
     def onRescaleChange(self):
         if self.ui.rescalingCheckBox.isChecked():
             self.ui.rescalingComboBox.setEnabled(True)
         else:
             self.ui.rescalingComboBox.setEnabled(False)
 
+    def onLocalChange(self):
+        choice = self.ui.localComboBox.currentText
+        if choice.startswith("Local"):
+            None
+        elif choice.startswith("Distant"):
+            if self._user_authentication:
+                if not self._user_authentication.isAuthentified:
+                    self._user_authentication.show()
+            else:
+                self._user_authentication = user_authentication()
+
+
+class user_authentication(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.createUi()
+
+        self.password = None
+        self.mail = None
+        self.isAuthentified = False
+
+        self.show()
+
+    def createUi(self):
+        self.setWindowTitle("Login")
+        self.setGeometry(200, 200, 300, 150)
+
+        # Email
+        self.email_label = QLabel("Email :   ")
+        self.email_edit = QLineEdit()
+        self.email_edit.setMaximumWidth(200)
+
+        # Password
+        self.password_label = QLabel("Password :   ")
+        self.password_edit = QLineEdit()
+        self.password_edit.setMaximumWidth(200)
+        self.password_edit.setEchoMode(QLineEdit.Password)
+
+        # Buttons
+        self.login_button = QPushButton("Connexion")
+        self.login_button.setCursor(QCursor(Qt.PointingHandCursor))
+        self.forgot_password_button = QPushButton("Forgot password ?")
+        self.forgot_password_button.setFlat(True)
+        self.forgot_password_button.setCursor(QCursor(Qt.PointingHandCursor))
+        self.create_account_button = QPushButton("Create account")
+        self.create_account_button.setFlat(True)
+        self.create_account_button.setCursor(QCursor(Qt.PointingHandCursor))
+
+        # Information display
+        self.info_label = QLabel("")
+        self.info_label.setStyleSheet("font-style: italic;")
+        self.info_label.setMaximumHeight(10)
+
+        email_layout = QHBoxLayout()
+        email_layout.addWidget(self.email_label)
+        email_layout.addWidget(self.email_edit)
+        email_layout.setAlignment(self.email_label, Qt.AlignRight)
+
+        password_layout = QHBoxLayout()
+        password_layout.addWidget(self.password_label)
+        password_layout.addWidget(self.password_edit)
+        password_layout.setAlignment(self.password_label, Qt.AlignRight)
+
+        info_layout = QHBoxLayout()
+        info_layout.addWidget(self.info_label)
+        info_layout.setAlignment(self.info_label, Qt.AlignRight)
+
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.create_account_button)
+        button_layout.addWidget(self.forgot_password_button)
+        button_layout.addWidget(self.login_button)
+
+        main_layout = QVBoxLayout()
+        main_layout.addLayout(email_layout)
+        main_layout.addLayout(password_layout)
+        main_layout.addLayout(info_layout)
+        main_layout.addLayout(button_layout)
+
+        self.setLayout(main_layout)
+
+        # Connections
+        self.login_button.connect(self.LogIn)
+        self.create_account_button(self.createAccount)
+        self.forgot_password_button(self.passwordForgot)
+
+    def createAccount(self):
+        ...
+
+    def passwordForgot(self):
+        ...
+
+    def LogIn(self):
+        ...
 #
 # TFSegmentationLogic
 #
@@ -672,7 +774,7 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
 
         if len(InputModelShape) == 3:
             if InputModelShape[-1] == 3:
-                return "2.5D RVB"
+                return "2.5D RGB"
             else:
                 return "2D"
 
@@ -751,3 +853,45 @@ class TFSegmentationTest(ScriptedLoadableModuleTest):
         self.assertEqual(outputScalarRange[1], inputScalarRange[1])
 
         self.delayDisplay('Test passed')
+
+class TFSegmentationServ(ScriptedLoadableModuleLogic):
+
+    def __init__(self):
+        """
+        Called when the logic class is instantiated. Can be used for initializing member variables.
+        """
+        ScriptedLoadableModuleLogic.__init__(self)
+        self.url = r"https://slicertensorflow.eu.pythonanywhere.com"
+
+    def authenticate_user(self, mail:str, password:str) -> bool:
+        user = {"mail":mail, "password":password}
+        r = requests.post(self.url + '/auth/authenticate', json=user)
+        return r
+
+    def is_password_strong(self, password: str) -> [bool, str]:
+        """Vérifie la force d'un mot de passe."""
+        # Vérifie si le mot de passe a au moins 8 caractères
+        if len(password) < 8:
+            return False, "Le mot de passe doit contenir au moins 8 caractères."
+
+        # Vérifie s'il y a au moins une lettre majuscule
+        if not any(char.isupper() for char in password):
+            return False, "Le mot de passe doit contenir au moins une lettre majuscule."
+
+        # Vérifie s'il y a au moins un caractère spécial
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+            return False, "Le mot de passe doit contenir au moins un caractère spécial."
+
+        # Si toutes les conditions sont satisfaites, le mot de passe est considéré comme fort
+        return True, "Le mot de passe est fort."
+
+    def change_password(self, mail: str)->str:
+        ...
+
+    def create_account(self, mail: str, password: str)->bool:
+        user = {"mail":mail, "password":password}
+        r = requests.post(self.url + '/auth/add_user', json=user)
+        return r
+
+
+

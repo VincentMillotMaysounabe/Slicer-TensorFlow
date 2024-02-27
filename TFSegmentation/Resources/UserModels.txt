@@ -1,2 +1,15 @@
 C:/Users/mayso/Desktop/Prostate segmentation/25d_mobileNetv2_model_chkpt1.h5
 C:/Users/mayso/Desktop/Prostate segmentation/prostateSegmentation.h5
+D:/MobileNet/25d_mobileNetv2Plus_model_chkpt3.h5
+C:/Users/VMI/OneDrive - EDAP TMS/Documents/03 - Projets/Prostate segmentation/2d_unet21_model_chkpt3.h5
+D:/MobileNet/25d_mobileNetv2Plus_model_chkpt7.h5
+
+D:/UnetV3/UNETV3_model_chkpt1.h5
+D:/IA prostate/ProstateSegmentation.h5
+D:/UnetV3/UNETV3_model_chkpt4.h5
+C:/Users/mayso/Desktop/Prostate segmentation/UNETV3_model_chkpt6.h5
+C:/Users/mayso/Desktop/Prostate segmentation/UNETV3_model_chkpt8.h5
+D:/UnetV3/UNETV3_model_chkpt12.h5
+D:/UnetV3/UNETV3_model_chkpt6.h5
+D:/UNETV3_model_chkpt13.h5
+E:/UNETV3_model_chkpt18.h5
