@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>314</width>
-    <height>469</height>
+    <width>316</width>
+    <height>473</height>
    </rect>
   </property>
   <property name="maximumSize">
@@ -51,7 +51,7 @@
       <item row="2" column="2">
        <widget class="QPushButton" name="installButton">
         <property name="text">
-         <string>Install</string>
+         <string>Import</string>
         </property>
        </widget>
       </item>

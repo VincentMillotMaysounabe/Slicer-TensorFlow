@@ -12,6 +12,7 @@ from slicer.ScriptedLoadableModule import *
 from slicer.util import VTKObservationMixin
 import requests
 from qt import QWidget, QLineEdit, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout,QCursor,Qt
+import re
 
 def CheckForDependencies():
     try :
@@ -167,7 +168,7 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         self.ui.addButton.connect("clicked(bool)", self.onAddButton)
         self.ui.deleteButton.connect("clicked(bool)", self.onDeleteButton)
-        self.ui.installButton.connect("clicked(bool)", self.onInstallButton)
+        self.ui.installButton.connect("clicked(bool)", self.onImportButton)
         self.ui.typeComboBox.currentIndexChanged.connect(self.onTypeChange)
         self.ui.modelComboBox.connect("currentNodeChanged(vtkMRMLNode*)", self.updateParameterNodeFromGUI)
         self.ui.rescalingCheckBox.connect("clicked(bool)", self.onRescaleChange)
@@ -183,12 +184,13 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         # Buttons
         self.ui.applyButton.connect('clicked(bool)', self.onApplyButton)
 
-        try:
-            from tensorflow import __version__ as TFversion
-            self.ui.versionLabel.setText(TFversion+'  ')
-            self.ui.installButton.setEnabled(False)
-        except:
-            None
+        if self.logic.computation:
+            try:
+                TFversion = self.logic.getTFversion()
+                self.ui.versionLabel.setText(TFversion + '  ')
+                self.ui.installButton.setEnabled(False)
+            except:
+                None
 
         # Make sure parameter node is initialized (needed for module reload)
         self.initializeParameterNode()
@@ -311,45 +313,26 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         """
         Run processing when user clicks "Apply" button.
         """
-        with slicer.util.tryWithErrorDisplay("Failed to compute results.", waitCursor=True):
-            ##############################################################################################
-            #Developper = VM, Description = Load selected TF model and call logic to perform segmentation#
-            #Loading is in safe mode and compile model with substitute optimizer, loss and metrics to    #
-            #use the model using the less informations possible                                          #
-            ##############################################################################################
+        ##############################################################################################
+        #Developper = VM, Description = Load selected TF model and call logic to perform segmentation#
+        #Loading is in safe mode and compile model with substitute optimizer, loss and metrics to    #
+        #use the model using the less informations possible                                          #
+        ##############################################################################################
 
-            # Load TF model
-            with slicer.util.tryWithErrorDisplay(message='Model loading failed', show=True, waitCursor=True):
-                self.logic.loadModel(self.userModels[self.ui.modelComboBox.currentIndex])
+        # Compute output
+        logging.info("Start Computing")
+        with slicer.util.tryWithErrorDisplay(message='Prediction failed', show=True, waitCursor=True):
+            #idealProcessingMethod = self.logic.getIdealProcessingMethod()
+            ProcessingChoice = self.ui.typeComboBox.currentText
 
-            # Compute output
-            logging.info("Start Computing")
-            with slicer.util.tryWithErrorDisplay(message='Prediction failed', show=True, waitCursor=True):
-                idealProcessingMethod = self.logic.getIdealProcessingMethod()
-                ProcessingChoice = self.ui.typeComboBox.currentText
+            if not self.logic.computation:
+                self.onLocalChange()
 
-                if idealProcessingMethod != ProcessingChoice:
-                    slicer.util.infoDisplay(
-                        "Input type error : the input will be process using the " + idealProcessingMethod +
-                        " method because of the detected input and output dimensions",
-                        WindowTitle="Processing information")
-                    self.ui.typeComboBox.setCurrentText(idealProcessingMethod)
-
-                if idealProcessingMethod == "2D":
-                    self.logic.process2D(self.ui.inputSelector.currentNode(),
-                                         self.ui.resizingCheckBox.isChecked(), self.ui.rescalingCheckBox.isChecked(),
-                                         self.ui.rescalingComboBox.currentText)
-
-                if idealProcessingMethod == "2.5D RGB":
-                    self.logic.process25Drvb(self.ui.inputSelector.currentNode(),
-                                   self.ui.resizingCheckBox.isChecked(), self.ui.rescalingCheckBox.isChecked(),
-                                         self.ui.rescalingComboBox.currentText)
-
-                if idealProcessingMethod == "2.5D":
-                    None
-
-                if idealProcessingMethod == "3D":
-                    None
+            if self.logic.computation:
+                self.logic.process(self.userModels[self.ui.modelComboBox.currentIndex],
+                    self.ui.typeComboBox.currentText, self.ui.inputSelector.currentNode(),
+                    self.ui.resizingCheckBox.isChecked(), self.ui.rescalingCheckBox.isChecked(),
+                    self.ui.rescalingComboBox.currentText)
 
             ###############################################################################################
     def onAddButton(self):
@@ -392,16 +375,6 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             # Inform user the model as beed deleted
             slicer.util.infoDisplay("The model was removed from list", windowTitle="Model removed")
 
-    def onInstallButton(self):
-        import pip
-        if hasattr(pip, 'main'):
-            pip.main(['install', 'tensorflow'])
-        else:
-            pip._internal.main(['install', 'tensorflow'])
-        with slicer.util.tryWithErrorDisplay("Failed to compute results.", waitCursor=True):
-            import tensorflow as tf
-            self.ui.versionLabel.setText(tf.__version__+'  ')
-            slicer.util.infoDisplay("TensorFlow was succesfully installed", windowTitle="TensorFlow installation")
 
     def onTypeChange(self):
         choice = self.ui.typeComboBox.currentText
@@ -425,97 +398,34 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
     def onLocalChange(self):
         choice = self.ui.localComboBox.currentText
+
         if choice.startswith("Local"):
-            None
+            self.logic.setComputation("Local")
         elif choice.startswith("Distant"):
             if self._user_authentication:
                 if not self._user_authentication.isAuthentified:
                     self._user_authentication.show()
             else:
                 self._user_authentication = user_authentication()
+            self.logic.setComputation("Distant")
 
+        if self.logic:
+            try:
+                TFversion = self.logic.getTFversion()
+                self.ui.versionLabel.setText(TFversion + '  ')
+                self.ui.installButton.setEnabled(False)
+            except:
+                None
 
-class user_authentication(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.createUi()
+    def onImportButton(self):
+        with slicer.util.tryWithErrorDisplay("Failed to connect to tensorflow.", waitCursor=True):
+            try:
+                self.onLocalChange()
+            except:
+                if self.ui.localComboBox.currentText.startswith("Local"):
+                    self.logic.installTF()
+            self.onLocalChange()
 
-        self.password = None
-        self.mail = None
-        self.isAuthentified = False
-
-        self.show()
-
-    def createUi(self):
-        self.setWindowTitle("Login")
-        self.setGeometry(200, 200, 300, 150)
-
-        # Email
-        self.email_label = QLabel("Email :   ")
-        self.email_edit = QLineEdit()
-        self.email_edit.setMaximumWidth(200)
-
-        # Password
-        self.password_label = QLabel("Password :   ")
-        self.password_edit = QLineEdit()
-        self.password_edit.setMaximumWidth(200)
-        self.password_edit.setEchoMode(QLineEdit.Password)
-
-        # Buttons
-        self.login_button = QPushButton("Connexion")
-        self.login_button.setCursor(QCursor(Qt.PointingHandCursor))
-        self.forgot_password_button = QPushButton("Forgot password ?")
-        self.forgot_password_button.setFlat(True)
-        self.forgot_password_button.setCursor(QCursor(Qt.PointingHandCursor))
-        self.create_account_button = QPushButton("Create account")
-        self.create_account_button.setFlat(True)
-        self.create_account_button.setCursor(QCursor(Qt.PointingHandCursor))
-
-        # Information display
-        self.info_label = QLabel("")
-        self.info_label.setStyleSheet("font-style: italic;")
-        self.info_label.setMaximumHeight(10)
-
-        email_layout = QHBoxLayout()
-        email_layout.addWidget(self.email_label)
-        email_layout.addWidget(self.email_edit)
-        email_layout.setAlignment(self.email_label, Qt.AlignRight)
-
-        password_layout = QHBoxLayout()
-        password_layout.addWidget(self.password_label)
-        password_layout.addWidget(self.password_edit)
-        password_layout.setAlignment(self.password_label, Qt.AlignRight)
-
-        info_layout = QHBoxLayout()
-        info_layout.addWidget(self.info_label)
-        info_layout.setAlignment(self.info_label, Qt.AlignRight)
-
-        button_layout = QHBoxLayout()
-        button_layout.addWidget(self.create_account_button)
-        button_layout.addWidget(self.forgot_password_button)
-        button_layout.addWidget(self.login_button)
-
-        main_layout = QVBoxLayout()
-        main_layout.addLayout(email_layout)
-        main_layout.addLayout(password_layout)
-        main_layout.addLayout(info_layout)
-        main_layout.addLayout(button_layout)
-
-        self.setLayout(main_layout)
-
-        # Connections
-        self.login_button.connect(self.LogIn)
-        self.create_account_button(self.createAccount)
-        self.forgot_password_button(self.passwordForgot)
-
-    def createAccount(self):
-        ...
-
-    def passwordForgot(self):
-        ...
-
-    def LogIn(self):
-        ...
 #
 # TFSegmentationLogic
 #
@@ -535,6 +445,7 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         Called when the logic class is instantiated. Can be used for initializing member variables.
         """
         ScriptedLoadableModuleLogic.__init__(self)
+        self.computation = None
 
     def setDefaultParameters(self, parameterNode):
         """
@@ -547,9 +458,14 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         #    parameterNode.SetParameter("Invert", "false")
         CheckForDependencies()
 
+    def setComputation(self, type: str):
+        if type=="Local":
+            self.computation = TFComputation()
+        elif type=="Distant":
+            self.computation = TFSegmentationServ()
 
 
-    def addModelPath(self, file_path, path):
+    def addModelPath(self, file_path: str, path: str):
         """
         Add a path to the model list in file_path.
         :param file_path: path of txt file where the model list is stored.
@@ -560,7 +476,7 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         with open(file_path, 'a') as f:
             f.write('\n' + path)
 
-    def removeModelPath(self, file_path, model):
+    def removeModelPath(self, file_path: str, model: str):
         """
         remove a path from the model list
         :param model: name of the model to be removed.
@@ -574,19 +490,29 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
                 if not m.endswith(model):
                     f.write(m)
 
-    def loadModel(self, modelPath):
-        # import tensorflow as tf
-        from tensorflow.keras.models import load_model
-        from tensorflow.keras.losses import BinaryCrossentropy
+    def installTF(self):
+        import pip
+        if hasattr(pip, 'main'):
+            pip.main(['install', 'tensorflow'])
+        else:
+            pip._internal.main(['install', 'tensorflow'])
+        with slicer.util.tryWithErrorDisplay("Failed to install TensorFlow.", waitCursor=True):
+            import tensorflow as tf
+            self.ui.versionLabel.setText(tf.__version__+'  ')
+            slicer.util.infoDisplay("TensorFlow was succesfully installed", windowTitle="TensorFlow installation")
 
-        # Load TF model
-        logging.info('Loading model...')
-        self.model = load_model(modelPath, compile=False)
+# ----------------------------------------------------------------------------
+# --------------------------------Computation---------------------------------
+# ----------------------------------------------------------------------------
+    def getTFversion(self):
+        if self.computation:
+            version = self.computation.getTFversion()
+        else:
+            version = "TF not reached"
+        return version
 
-        # compile model with substitute optimizer, loss and metrics.
-        self.model.compile(optimizer='Adam', loss=BinaryCrossentropy(), metrics=['accuracy'])
 
-    def process2D(self, inputVolume, autoResize=True, autoRescale=True, rescaleScale=None):
+    def process(self, model_path, method: str, inputVolume, autoResize=True, autoRescale=True, rescaleScale=None):
         """
         Run the processing algorithm.
         Can be used without GUI widget.
@@ -602,32 +528,14 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         if not inputVolume:
             raise ValueError("Input volume is invalid")
 
-        if not self.model:
-            raise ValueError("Model is invalid")
-
-        InputModelShape = self.model.inputs[0].shape.as_list()[1:] #first dim is None
-
         # Getting data array
         name = inputVolume.GetName()
         InputVolumeAsArray = slicer.util.array(name)
-        InputVolumeShape = InputVolumeAsArray.shape
 
-        # Pre-processing
-        preprocessedInputArray = self.preProcessing(inputVolume, InputModelShape, autoResize, autoRescale,
-                                                    rescaleScale)
+        #------------------------Tensorflow needed--------------------------
+        result = self.computation.compute(model_path, method, InputVolumeAsArray, autoResize, autoRescale, rescaleScale)
+        #----------------------------------------------------------------------
 
-        # Process data using model
-        result = self.model.predict(preprocessedInputArray)
-
-        # Making sure the output as the same shape as input
-        from tensorflow.keras.layers import Resizing
-
-        resizeOutputProcess = Resizing(InputVolumeShape[1], InputVolumeShape[2])
-        resultResized = []
-        for img in result:
-            resultResized.append(resizeOutputProcess(img))
-        result = np.array(resultResized)
-        
         # making sure it is binary
         # Note for later : should take into account more than 2 labels
         result = np.squeeze(result, axis=3) #Always needed ? => ,3 images ?
@@ -645,147 +553,6 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
 
         logging.info("Process ended successfully")
 
-    def autoRescaleImg(self, input_img, scale):
-        import tensorflow as tf
-        if scale is None or scale.startswith("[0,1]"):
-            rescale = tf.keras.layers.Rescaling(1. / tf.reduce_max(input_img))
-            return rescale(input_img)
-        elif scale.startswith("[-1,1]"):
-            rescale = tf.keras.layers.Rescaling(2. / tf.reduce_max(input_img), offset=-1)
-            return rescale(input_img)
-
-
-    def process3D(self, inputVolume, model, autoResize=True, autoRescale=True, rescaleScale=None):
-        # Volume et model input doivent être exactement de la même dimension car sinon impossible.
-
-        # Getting data array
-        name = inputVolume.GetName()
-        InputVolumeAsArray = slicer.util.array(name)
-        InputVolumeShape = InputVolumeAsArray.shape
-
-        model_input_shape = model.inputs[0].shape.as_list()[1:] #first dim is None
-
-        #Adapter quand même sur les deux dernières dimensions ? -> pourrait quand même être utile
-        #-> Oui on est pas là pour faire les choses à moitié
-        if InputVolumeShape != model_input_shape:
-            raise ValueError("Input size and model input size are not compatible.")
-
-        return None
-
-    def process25Drvb(self, inputVolume, autoResize=True, autoRescale=True, rescaleScale=None):
-        """
-        Run the processing algorithm.
-        Can be used without GUI widget.
-        :param inputVolume: volume to be thresholded
-        :param model: tensorFlow model to segment input volume with
-        """
-
-        ######################################################################
-        # Developper = VM Description = Processing input volume with TF model #
-        ######################################################################
-
-        # making sure inputs are correct
-        if not inputVolume:
-            raise ValueError("Input volume is invalid")
-
-        if not self.model:
-            raise ValueError("Model is invalid")
-
-        InputModelShape = self.model.inputs[0].shape.as_list()[1:]  # first dim is None
-
-        # Getting data array
-        name = inputVolume.GetName()
-        InputVolumeAsArray = slicer.util.array(name)
-        InputVolumeShape = InputVolumeAsArray.shape
-
-        # Pre-processing
-        preprocessedInputArray = self.preProcessing(inputVolume, InputModelShape, autoResize, autoRescale, rescaleScale)
-
-        # Converting Grayscale to RVB
-        inputs = np.zeros((len(preprocessedInputArray), InputModelShape[0], InputModelShape[1], 3))
-        for j in range(len(preprocessedInputArray)):
-            inputs[j, :, :, 1] = np.squeeze(preprocessedInputArray[j])
-            if j != 0:
-                inputs[j, :, :, 0] = np.squeeze(preprocessedInputArray[j - 1])
-            if j != (len(preprocessedInputArray) - 1):
-                inputs[j, :, :, 2] = np.squeeze(preprocessedInputArray[j + 1])
-
-        # Process data using model
-        result = self.model.predict(inputs)
-
-        # Making sure the output as the same shape as input
-        from tensorflow.keras.layers import Resizing
-
-        resizeOutputProcess = Resizing(InputVolumeShape[1], InputVolumeShape[2])
-        resultResized = []
-        for img in result:
-            resultResized.append(resizeOutputProcess(img))
-        result = np.array(resultResized)
-
-        # making sure it is binary
-        # Note for later : should take into account more than 2 labels
-        result = np.squeeze(result, axis=3)  # Always needed ? => ,3 images ?
-        result = np.array(result > 0.5, dtype=float)
-
-        # Create segmentation node
-        # Note for later : segmentation node should be the selected one
-        segmentationNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode")
-        segmentationNode.SetName(name + " segmentation")
-
-        # Create new segment
-        addedSegmentID = segmentationNode.GetSegmentation().AddEmptySegment("Model Segmentation")
-        slicer.util.updateSegmentBinaryLabelmapFromArray(result, segmentationNode, "Model Segmentation",
-                                                         referenceVolumeNode=inputVolume)
-        segmentationNode.SetDisplayVisibility(True)
-
-        logging.info("Process ended successfully")
-
-    def preProcessing(self, inputVolume, model_2D_input_size,  autoResize=True, autoRescale=True, rescaleScale=None):
-        # Getting data array
-        name = inputVolume.GetName()
-        InputVolumeAsArray = slicer.util.array(name)
-
-        # Pre-processing
-        from tensorflow.keras.layers import Resizing
-        resizeProcess = Resizing(model_2D_input_size[0], model_2D_input_size[1])
-        preprocessedInputArray = []
-        for img in InputVolumeAsArray:
-            expandedImg = np.expand_dims(img, axis=2)
-
-            # Resizing array if selected
-            if autoResize: resizedImg = resizeProcess(expandedImg)
-            else: resizedImg = expandedImg
-
-            # Rescaling values if selected
-            if autoRescale: rescaledImg = self.autoRescaleImg(resizedImg, rescaleScale)
-            else: rescaledImg = resizedImg
-
-            preprocessedInputArray.append(rescaledImg)
-        preprocessedInputArray = np.array(preprocessedInputArray)
-
-        return preprocessedInputArray
-
-    def getIdealProcessingMethod(self):
-        """
-        returns a label containing the ideal processing method based on volume input shape and model input shape
-        """
-        InputModelShape = self.model.inputs[0].shape.as_list()[1:] #first dim is None
-        OutputModelShape = self.model.outputs[0].shape.as_list()[1:] #first dim is None
-
-        if len(InputModelShape) == 3:
-            if InputModelShape[-1] == 3:
-                return "2.5D RGB"
-            else:
-                return "2D"
-
-
-        if len(InputModelShape) == 4:
-            return "3D"
-
-        if len(InputModelShape) == 4 and len(OutputModelShape) == 3:
-            return "2.5D"
-
-        return None
 #
 # TFSegmentationTest
 #
@@ -854,43 +621,312 @@ class TFSegmentationTest(ScriptedLoadableModuleTest):
 
         self.delayDisplay('Test passed')
 
-class TFSegmentationServ(ScriptedLoadableModuleLogic):
-
+class user_authentication(QWidget):
     def __init__(self):
-        """
-        Called when the logic class is instantiated. Can be used for initializing member variables.
-        """
-        ScriptedLoadableModuleLogic.__init__(self)
-        self.url = r"https://slicertensorflow.eu.pythonanywhere.com"
+        super().__init__()
+        self.createUi()
 
-    def authenticate_user(self, mail:str, password:str) -> bool:
-        user = {"mail":mail, "password":password}
-        r = requests.post(self.url + '/auth/authenticate', json=user)
-        return r
+        self.password = None
+        self.mail = None
+        self.isAuthentified = False
 
-    def is_password_strong(self, password: str) -> [bool, str]:
+        self.show()
+
+    def createUi(self, display_confirm_password: bool = False):
+        self.setWindowTitle("Login to Slicer-TensorFlow servor")
+        self.setGeometry(200, 200, 300, 150)
+
+        # Email
+        self.email_label = QLabel("Email :   ")
+        self.email_edit = QLineEdit()
+        self.email_edit.setMaximumWidth(200)
+
+        # Password
+        self.password_label = QLabel("Password :   ")
+        self.password_edit = QLineEdit()
+        self.password_edit.setMaximumWidth(200)
+        self.password_edit.setEchoMode(QLineEdit.Password)
+
+        #Confirm Password
+        self.confirm_password_label = QLabel("Confirm\npassword :   ")
+        self.confirm_password_edit = QLineEdit()
+        self.confirm_password_edit.setMaximumWidth(200)
+        self.confirm_password_edit.setEchoMode(QLineEdit.Password)
+
+        # Buttons
+        self.login_button = QPushButton("Log In")
+        self.login_button.setCursor(QCursor(Qt.PointingHandCursor))
+        if display_confirm_password:
+            self.login_button.setFlat(True)
+        self.forgot_password_button = QPushButton("Forgot password ?")
+        if display_confirm_password:
+            self.forgot_password_button.setText("Cancel")
+        self.forgot_password_button.setFlat(True)
+        self.forgot_password_button.setCursor(QCursor(Qt.PointingHandCursor))
+        self.create_account_button = QPushButton("Create account")
+        if not display_confirm_password:
+            self.create_account_button.setFlat(True)
+        self.create_account_button.setCursor(QCursor(Qt.PointingHandCursor))
+
+        # Information display
+        self.info_label = QLabel("welcome !")
+        self.info_label.setStyleSheet("font-style: italic;")
+        self.info_label.setMaximumHeight(10)
+
+        email_layout = QHBoxLayout()
+        email_layout.addWidget(self.email_label)
+        email_layout.addWidget(self.email_edit)
+        email_layout.setAlignment(self.email_label, Qt.AlignRight)
+
+        password_layout = QHBoxLayout()
+        password_layout.addWidget(self.password_label)
+        password_layout.addWidget(self.password_edit)
+        password_layout.setAlignment(self.password_label, Qt.AlignRight)
+
+        confirm_password_layout = QHBoxLayout()
+        confirm_password_layout.addWidget(self.confirm_password_label)
+        confirm_password_layout.addWidget(self.confirm_password_edit)
+        confirm_password_layout.setAlignment(self.confirm_password_label, Qt.AlignRight)
+
+        info_layout = QHBoxLayout()
+        info_layout.addWidget(self.info_label)
+        info_layout.setAlignment(self.info_label, Qt.AlignRight)
+
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.create_account_button)
+        button_layout.addWidget(self.forgot_password_button)
+        button_layout.addWidget(self.login_button)
+
+        if not self.layout():
+            main_layout = QVBoxLayout()
+            main_layout.addLayout(email_layout)
+            main_layout.addLayout(password_layout)
+            if display_confirm_password:
+                main_layout.addLayout(confirm_password_layout)
+            main_layout.addLayout(info_layout)
+            main_layout.addLayout(button_layout)
+            self.setLayout(main_layout)
+        else:
+            self.deleteItemsOfLayout(self.layout())
+            self.layout().addLayout(email_layout)
+            self.layout().addLayout(password_layout)
+            if display_confirm_password:
+                self.layout().addLayout(confirm_password_layout)
+            self.layout().addLayout(info_layout)
+            self.layout().addLayout(button_layout)
+
+        # Connections
+        self.login_button.connect("clicked(bool)", self.LogIn)
+        if not display_confirm_password:
+            self.create_account_button.connect("clicked(bool)", self.diplayCreateAccount)
+        else:
+            self.create_account_button.connect("clicked(bool)", self.createAccount)
+        if not display_confirm_password:
+            self.forgot_password_button.connect("clicked(bool)", self.passwordForgot)
+        else:
+            self.forgot_password_button.connect("clicked(bool)", self.cancel_create_account)
+        if display_confirm_password:
+            self.email_edit.textChanged.connect(self.caracterChanged)
+            self.password_edit.textChanged.connect(self.caracterChanged)
+            self.confirm_password_edit.textChanged.connect(self.caracterChanged)
+            self.create_account_button.setEnabled(False)
+            self.login_button.setEnabled(False)
+
+    def deleteItemsOfLayout(self, layout):
+        if layout is not None:
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None)
+                else:
+                    self.deleteItemsOfLayout(item.layout())
+
+    def cancel_create_account(self):
+        self.createUi(display_confirm_password=False)
+
+    def diplayCreateAccount(self):
+        self.createUi(display_confirm_password=True)
+
+    def createAccount(self):
+        resp = TFSegmentationServ().create_account(mail=self.email_edit.text, password=self.password_edit.text)
+        if resp.json()["is_user_added"]:
+            self.createUi(display_confirm_password=False)
+            self.info_label.setText("Account successfuly created, please Log In")
+        else:
+            self.info_label.setText("Unable to create account, mail already linked to an account")
+
+    def caracterChanged(self):
+        self.create_account_button.setEnabled(False)
+
+        if not '@' in self.email_edit.text:
+            self.info_label.setText("Email seems invalid")
+            return
+
+        is_strong, msg = self.check_password_strength(self.password_edit.text)
+        if not is_strong:
+            self.info_label.setText(msg)
+            return
+
+        if self.password_edit.text != self.confirm_password_edit.text:
+            self.info_label.setText("Passwords are different")
+            return
+
+        self.info_label.setText("Requirements checked !")
+        self.create_account_button.setEnabled(True)
+
+    def check_password_strength(self, password: str) -> [bool, str]:
         """Vérifie la force d'un mot de passe."""
         # Vérifie si le mot de passe a au moins 8 caractères
         if len(password) < 8:
-            return False, "Le mot de passe doit contenir au moins 8 caractères."
+            return False, "Password must contain at least 8 characters " #"Le mot de passe doit contenir au moins 8 caractères."
 
         # Vérifie s'il y a au moins une lettre majuscule
         if not any(char.isupper() for char in password):
-            return False, "Le mot de passe doit contenir au moins une lettre majuscule."
+            return False, "Password must contain at least 1 capital letter" #"Le mot de passe doit contenir au moins une lettre majuscule."
 
         # Vérifie s'il y a au moins un caractère spécial
         if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
-            return False, "Le mot de passe doit contenir au moins un caractère spécial."
+            return False, "Password must contain at least 1 special character" # "Le mot de passe doit contenir au moins un caractère spécial."
 
         # Si toutes les conditions sont satisfaites, le mot de passe est considéré comme fort
-        return True, "Le mot de passe est fort."
+        return True, "Password is strong" # "Le mot de passe est fort."
+
+    def passwordForgot(self):
+        ...
+
+    def LogIn(self):
+        resp = TFSegmentationServ().authenticate_user(mail=self.email_edit.text, password=self.password_edit.text)
+        if resp.json()["is_authenticated"]:
+            self.mail = self.email_edit.text
+            self.password = self.email_edit.text
+            self.hide()
+        else :
+            self.info_label.setText("Unable to Log In, please check your mail and password")
+
+
+class TFComputation():
+    def __init__(self):
+        self.model = None
+
+    def getTFversion(self):
+        from tensorflow import __version__ as TFversion
+        return TFversion
+
+    def loadModel(self, modelPath):
+        # import tensorflow as tf
+        from tensorflow.keras.models import load_model
+        from tensorflow.keras.losses import BinaryCrossentropy
+
+        # Load TF model
+        logging.info('Loading model...')
+        self.model = load_model(modelPath, compile=False)
+
+        # compile model with substitute optimizer, loss and metrics.
+        self.model.compile(optimizer='Adam', loss=BinaryCrossentropy(), metrics=['accuracy'])
+
+    def compute(self, model_path, method, InputVolumeAsArray, autoResize, autoRescale, rescaleScale):
+        self.loadModel(model_path)
+        InputVolumeShape = InputVolumeAsArray.shape
+        InputModelShape = self.model.inputs[0].shape.as_list()[1:]  # first dim is None
+
+        # Pre-processing
+        preprocessedInputArray = self.preProcessing(InputVolumeAsArray, InputModelShape, autoResize, autoRescale,
+                                                    rescaleScale)
+        inputs = preprocessedInputArray
+        if method=="2.5D RGB":
+            # Converting Grayscale to RVB
+            inputs = np.zeros((len(preprocessedInputArray), InputModelShape[0], InputModelShape[1], 3))
+            for j in range(len(preprocessedInputArray)):
+                inputs[j, :, :, 1] = np.squeeze(preprocessedInputArray[j])
+                if j != 0:
+                    inputs[j, :, :, 0] = np.squeeze(preprocessedInputArray[j - 1])
+                if j != (len(preprocessedInputArray) - 1):
+                    inputs[j, :, :, 2] = np.squeeze(preprocessedInputArray[j + 1])
+
+        # Process data using model
+        result = self.model.predict(inputs)
+
+        # Making sure the output as the same shape as input
+        from tensorflow.keras.layers import Resizing
+
+        resizeOutputProcess = Resizing(InputVolumeShape[1], InputVolumeShape[2])
+        resultResized = []
+        for img in result:
+            resultResized.append(resizeOutputProcess(img))
+        result = np.array(resultResized)
+
+        return result
+
+
+    def preProcessing(self, InputVolumeAsArray, model_2D_input_size,  autoResize=True, autoRescale=True, rescaleScale=None):
+        # Pre-processing
+        from tensorflow.keras.layers import Resizing
+        resizeProcess = Resizing(model_2D_input_size[0], model_2D_input_size[1])
+        preprocessedInputArray = []
+        for img in InputVolumeAsArray:
+            expandedImg = np.expand_dims(img, axis=2)
+
+            # Resizing array if selected
+            if autoResize: resizedImg = resizeProcess(expandedImg)
+            else: resizedImg = expandedImg
+
+            # Rescaling values if selected
+            if autoRescale: rescaledImg = self.autoRescaleImg(resizedImg, rescaleScale)
+            else: rescaledImg = resizedImg
+
+            preprocessedInputArray.append(rescaledImg)
+        preprocessedInputArray = np.array(preprocessedInputArray)
+
+        return preprocessedInputArray
+
+
+    def autoRescaleImg(self, input_img, scale):
+        import tensorflow as tf
+        if scale is None or scale.startswith("[0,1]"):
+            rescale = tf.keras.layers.Rescaling(1. / tf.reduce_max(input_img))
+            return rescale(input_img)
+        elif scale.startswith("[-1,1]"):
+            rescale = tf.keras.layers.Rescaling(2. / tf.reduce_max(input_img), offset=-1)
+            return rescale(input_img)
+
+
+    def getIdealProcessingMethod(self):
+        """
+        returns a label containing the ideal processing method based on volume input shape and model input shape
+        """
+        InputModelShape = self.model.inputs[0].shape.as_list()[1:] #first dim is None
+        OutputModelShape = self.model.outputs[0].shape.as_list()[1:] #first dim is None
+
+        if len(InputModelShape) == 3:
+            if InputModelShape[-1] == 3:
+                return "2.5D RGB"
+            else:
+                return "2D"
+
+        if len(InputModelShape) == 4:
+            return "3D"
+
+        if len(InputModelShape) == 4 and len(OutputModelShape) == 3:
+            return "2.5D"
+
+        return None
+
+class TFSegmentationServ():
+    def __init__(self):
+        self.url = r"https://slicertensorflow.eu.pythonanywhere.com"
+
+    def authenticate_user(self, mail:str, password:str) -> bool:
+        user = {"mail": mail, "password": password}
+        r = requests.post(self.url + '/auth/authenticate', json=user)
+        return r
 
     def change_password(self, mail: str)->str:
         ...
 
     def create_account(self, mail: str, password: str)->bool:
-        user = {"mail":mail, "password":password}
-        r = requests.post(self.url + '/auth/add_user', json=user)
+        user = {"mail": mail, "password": password}
+        r = requests.post(self.url + '/auth/adduser', json=user)
         return r
 
 
