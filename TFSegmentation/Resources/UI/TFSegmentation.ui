@@ -204,25 +204,8 @@
      <property name="title">
       <string>Model list options</string>
      </property>
-     <layout class="QFormLayout" name="formLayout_3">
+     <layout class="QGridLayout" name="gridLayout_4">
       <item row="0" column="0">
-       <widget class="QPushButton" name="addButton">
-        <property name="text">
-         <string>Add model</string>
-        </property>
-       </widget>
-      </item>
-      <item row="0" column="1">
-       <widget class="ctkPathLineEdit" name="modelPathLineEdit">
-        <property name="nameFilters">
-         <stringlist>
-          <string>*.h5</string>
-          <string>*.keras</string>
-         </stringlist>
-        </property>
-       </widget>
-      </item>
-      <item row="1" column="0">
        <widget class="QPushButton" name="deleteButton">
         <property name="maximumSize">
          <size>
@@ -232,6 +215,24 @@
         </property>
         <property name="text">
          <string>Delete model</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="2">
+       <widget class="ctkPathLineEdit" name="modelPathLineEdit">
+        <property name="nameFilters">
+         <stringlist>
+          <string>*tflite; *h5</string>
+          <string>*h5</string>
+          <string>*tflite</string>
+         </stringlist>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QPushButton" name="addButton">
+        <property name="text">
+         <string>Add model</string>
         </property>
        </widget>
       </item>
@@ -301,6 +302,16 @@
        </widget>
       </item>
      </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="statuLabel">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+     </property>
     </widget>
    </item>
    <item>
