@@ -4,7 +4,7 @@ The following steps shows how the extension works with a 2D U-net trained for pr
 ## 0. Needed material
 To reproduce the following steps, you will need:
   -  axial T2 prostate MRI images (4 examples can be found in "Example <N>" folders)
-  -  the pre-trained 2D U-net segmentation model (can be found in "model" folder)
+  -  the pre-trained 2D U-net segmentation model (can be found in "model" folder). For local computing, please use *.h5 files only.
 
 You can download those files and unzip them to reproduce this tutorial of using the presented slicer extension.
 
@@ -12,8 +12,12 @@ You can download those files and unzip them to reproduce this tutorial of using 
 After launching slicer, load the MRI images into the app as a Node. Make sure those are axial T2w images so the model can be used for what he is trained for.
 
 ## 2. First step into Slicer-TensorFlow extension
-Launch the extension by finding it into Modules > Segmentation > TFSegmentation. After clicking, the module can take some time before appearing because he checks for his dependancies (mainly TensorFlow).
+Launch the extension by finding it into Modules > Segmentation > TFSegmentation.
 
+### Distant computation
+Select Distant computation in "Processing type". If you plan to perform multiple inferences you can create an account for it to be quicker (model will directly be saved into the Raspberry Pi).
+
+### Local computation
 If it's your first time using the extension, TensorFlow will not be installed. In this case, you should see this information: <br />
 <img width="349" alt="image" src="https://github.com/VincentMillotMaysounabe/Slicer-TensorFlow/assets/114880539/c656d5fe-f2a8-4e58-8698-3932d51a5075"><br />
 You can click on "install" button to download and install the latest TensorFlow version. Once it is installed, the version should appear, and the install button will be disabled as shown bellow.<br />
