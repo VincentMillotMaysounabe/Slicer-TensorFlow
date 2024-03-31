@@ -9,10 +9,15 @@ import ctk
 import numpy as np
 import slicer
 from slicer.ScriptedLoadableModule import *
-from slicer.util import VTKObservationMixin
+from slicer.util import VTKObservationMixin, createProgressDialog
 import requests
-from qt import QWidget, QLineEdit, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout,QCursor,Qt
+from qt import QWidget, QCheckBox, QLineEdit, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout,QCursor,Qt,QProgressBar, QApplication
 import re
+import pickle
+from time import sleep
+from werkzeug.utils import secure_filename
+from io import BytesIO
+import json
 
 def CheckForDependencies():
     try :
@@ -126,8 +131,17 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         ########################################################################
         self.userModels = None
         # Load model names from local repository
-        with open(self.resourcePath('UserModels.txt')) as f:
-            self.userModels = f.readlines()
+
+        try:
+            with open(self.resourcePath('UserModels'), 'rb') as f:
+                data = pickle.load(f)
+                self.userModels = data['models']
+        except:
+            with open(self.resourcePath('UserModels'), 'wb') as f:
+                data = {}
+                data["models"] = list()
+                pickle.dump(data, f)
+                self.userModels = []
 
         ########################################################################
 
@@ -150,7 +164,7 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
 
         # Create logic class. Logic implements all computations that should be possible to run
         # in batch mode, without a graphical user interface.
-        self.logic = TFSegmentationLogic()
+        self.logic = TFSegmentationLogic(self.ui.statuLabel)
 
         # Connections
 
@@ -291,7 +305,6 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         else:
             self.ui.applyButton.toolTip = "Select model, input & output volume nodes"
 
-
         # All the GUI updates are done
         self._updatingGUIFromParameterNode = False
 
@@ -344,13 +357,14 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             return
 
         # Check if path already exist in file
-        with open(self.resourcePath('UserModels.txt')) as f:
-            paths = f.readlines()
+        with open(self.resourcePath('UserModels'), 'rb') as f:
+            data = pickle.load(f)
+            paths = data["models"]
             if self.ui.modelPathLineEdit.currentPath in paths:
                 return False
 
         # Add model to list
-        self.logic.addModelPath(self.resourcePath('UserModels.txt'), self.ui.modelPathLineEdit.currentPath)
+        self.logic.addModelPath(self.resourcePath('UserModels'), self.ui.modelPathLineEdit.currentPath)
         # Add model to comboBox & set combobox to this item
         self.ui.modelComboBox.addItem(self.ui.modelPathLineEdit.currentPath.split('/')[-1].strip('\n'))
         self.ui.modelComboBox.setCurrentText(self.ui.modelPathLineEdit.currentPath.split('/')[-1].strip('\n'))
@@ -364,7 +378,7 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
             index = self.ui.modelComboBox.currentIndex
             model = self.userModels[self.ui.modelComboBox.currentIndex]
             # Delete model from txt file
-            self.logic.removeModelPath(self.resourcePath('UserModels.txt'), model)
+            self.logic.removeModelPath(self.resourcePath('UserModels'), model)
 
             # Delete model from self.userModels
             self.userModels.pop(index)
@@ -400,22 +414,34 @@ class TFSegmentationWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         choice = self.ui.localComboBox.currentText
 
         if choice.startswith("Local"):
-            self.logic.setComputation("Local")
+            self.logic.setComputation("Local", self._user_authentication)
+            if 'tensorflow' in sys.modules:
+                self.ui.installButton.setEnabled(False)
+            else:
+                self.ui.installButton.setEnabled(True)
+            self.ui.installButton.setText("Import")
+
         elif choice.startswith("Distant"):
             if self._user_authentication:
                 if not self._user_authentication.isAuthentified:
                     self._user_authentication.show()
+                    self.ui.installButton.setEnabled(True)
+                else:
+                    self.ui.installButton.setEnabled(False)
             else:
                 self._user_authentication = user_authentication()
-            self.logic.setComputation("Distant")
+                self.ui.installButton.setEnabled(True)
+
+            self.ui.installButton.setText("Connect")
+            self.logic.setComputation("Distant", self._user_authentication)
 
         if self.logic:
             try:
                 TFversion = self.logic.getTFversion()
                 self.ui.versionLabel.setText(TFversion + '  ')
-                self.ui.installButton.setEnabled(False)
-            except:
-                None
+            except Exception as e:
+                print(e)
+
 
     def onImportButton(self):
         with slicer.util.tryWithErrorDisplay("Failed to connect to tensorflow.", waitCursor=True):
@@ -440,12 +466,13 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
     https://github.com/Slicer/Slicer/blob/main/Base/Python/slicer/ScriptedLoadableModule.py
     """
 
-    def __init__(self):
+    def __init__(self, UIlabel):
         """
         Called when the logic class is instantiated. Can be used for initializing member variables.
         """
         ScriptedLoadableModuleLogic.__init__(self)
         self.computation = None
+        self.infoLabel = UIlabel
 
     def setDefaultParameters(self, parameterNode):
         """
@@ -456,13 +483,14 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         #    parameterNode.SetParameter("Threshold", "100.0")
         #if not parameterNode.GetParameter("Invert"):
         #    parameterNode.SetParameter("Invert", "false")
-        CheckForDependencies()
+        # CheckForDependencies()
+        None
 
-    def setComputation(self, type: str):
+    def setComputation(self, type: str, auth):
         if type=="Local":
             self.computation = TFComputation()
         elif type=="Distant":
-            self.computation = TFSegmentationServ()
+            self.computation = TFSegmentationServ(auth)
 
 
     def addModelPath(self, file_path: str, path: str):
@@ -471,34 +499,60 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         :param file_path: path of txt file where the model list is stored.
         :param path: path to be added.
         """
-
+        """
         # append path to file
         with open(file_path, 'a') as f:
-            f.write('\n' + path)
+            f.write('\n' + path)"""
+        try :
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
+                models = data["models"]
+        except:
+            models = list()
+
+        models.append(path)
+        data["models"] = models
+
+        with open(file_path, 'wb') as f:
+            pickle.dump(data, f)
 
     def removeModelPath(self, file_path: str, model: str):
         """
         remove a path from the model list
         :param model: name of the model to be removed.
         """
-
+        """
         # remove model from txt file
         with open(file_path, 'r') as f:
             model_list = f.readlines()
         with open(file_path, 'w') as f:
             for m in model_list:
                 if not m.endswith(model):
-                    f.write(m)
+                    f.write(m)"""
+        try :
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
+                models = data["models"]
+        except:
+            models = list()
+
+        if model in models:
+            models.remove(model)
+
+        data["models"] = models
+
+        with open(file_path, 'wb') as f:
+            pickle.dump(data, f)
 
     def installTF(self):
         import pip
         if hasattr(pip, 'main'):
-            pip.main(['install', 'tensorflow'])
+            pip.main(['install', 'tensorflow==2.15.0'])
         else:
-            pip._internal.main(['install', 'tensorflow'])
+            pip._internal.main(['install', 'tensorflow==2.15.0'])
         with slicer.util.tryWithErrorDisplay("Failed to install TensorFlow.", waitCursor=True):
             import tensorflow as tf
-            self.ui.versionLabel.setText(tf.__version__+'  ')
+            print(tf.__version__+'  ')
             slicer.util.infoDisplay("TensorFlow was succesfully installed", windowTitle="TensorFlow installation")
 
 # ----------------------------------------------------------------------------
@@ -531,27 +585,29 @@ class TFSegmentationLogic(ScriptedLoadableModuleLogic):
         # Getting data array
         name = inputVolume.GetName()
         InputVolumeAsArray = slicer.util.array(name)
+        InputVolumeAsArray = np.array(InputVolumeAsArray, dtype=np.uint16)
 
         #------------------------Tensorflow needed--------------------------
         result = self.computation.compute(model_path, method, InputVolumeAsArray, autoResize, autoRescale, rescaleScale)
         #----------------------------------------------------------------------
 
-        # making sure it is binary
-        # Note for later : should take into account more than 2 labels
-        result = np.squeeze(result, axis=3) #Always needed ? => ,3 images ?
-        result = np.array(result > 0.5, dtype=float)
+        if result is not None:
+            # making sure it is binary
+            # Note for later : should take into account more than 2 labels
+            result = np.squeeze(result, axis=3) #Always needed ? => ,3 images ?
+            result = np.array(result > 0.5, dtype=float)
 
-        # Create segmentation node
-        # Note for later : segmentation node should be the selected one
-        segmentationNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode")
-        segmentationNode.SetName(name+" segmentation")
+            # Create segmentation node
+            # Note for later : segmentation node should be the selected one
+            segmentationNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode")
+            segmentationNode.SetName(name+" segmentation")
 
-        # Create new segment
-        addedSegmentID = segmentationNode.GetSegmentation().AddEmptySegment("Model Segmentation")
-        slicer.util.updateSegmentBinaryLabelmapFromArray(result, segmentationNode, "Model Segmentation", referenceVolumeNode = inputVolume)
-        segmentationNode.SetDisplayVisibility(True)
+            # Create new segment
+            addedSegmentID = segmentationNode.GetSegmentation().AddEmptySegment("Model Segmentation")
+            slicer.util.updateSegmentBinaryLabelmapFromArray(result, segmentationNode, "Model Segmentation", referenceVolumeNode = inputVolume)
+            segmentationNode.SetDisplayVisibility(True)
 
-        logging.info("Process ended successfully")
+            logging.info("Process ended successfully")
 
 #
 # TFSegmentationTest
@@ -629,7 +685,9 @@ class user_authentication(QWidget):
         self.password = None
         self.mail = None
         self.isAuthentified = False
+        self.SID = None
 
+        self.readAccount()
         self.show()
 
     def createUi(self, display_confirm_password: bool = False):
@@ -669,9 +727,14 @@ class user_authentication(QWidget):
         self.create_account_button.setCursor(QCursor(Qt.PointingHandCursor))
 
         # Information display
-        self.info_label = QLabel("welcome !")
+        self.info_label = QLabel("User authentication speeds up computing by saving\n\t\t the model for future predictions.")
         self.info_label.setStyleSheet("font-style: italic;")
-        self.info_label.setMaximumHeight(10)
+        self.info_label.setMaximumHeight(30)
+
+        # Remember me option
+        self.remember_check = QCheckBox()
+        self.remember_check.setText("Remember me")
+        self.remember_check.setChecked(True)
 
         email_layout = QHBoxLayout()
         email_layout.addWidget(self.email_label)
@@ -688,7 +751,9 @@ class user_authentication(QWidget):
         confirm_password_layout.addWidget(self.confirm_password_edit)
         confirm_password_layout.setAlignment(self.confirm_password_label, Qt.AlignRight)
 
-        info_layout = QHBoxLayout()
+        info_layout = QVBoxLayout()
+        info_layout.addWidget(self.remember_check)
+        info_layout.setAlignment(self.remember_check, Qt.AlignRight)
         info_layout.addWidget(self.info_label)
         info_layout.setAlignment(self.info_label, Qt.AlignRight)
 
@@ -749,7 +814,7 @@ class user_authentication(QWidget):
         self.createUi(display_confirm_password=True)
 
     def createAccount(self):
-        resp = TFSegmentationServ().create_account(mail=self.email_edit.text, password=self.password_edit.text)
+        resp = TFSegmentationServ(None).create_account(mail=self.email_edit.text, password=self.password_edit.text)
         if resp.json()["is_user_added"]:
             self.createUi(display_confirm_password=False)
             self.info_label.setText("Account successfuly created, please Log In")
@@ -796,24 +861,46 @@ class user_authentication(QWidget):
         ...
 
     def LogIn(self):
-        resp = TFSegmentationServ().authenticate_user(mail=self.email_edit.text, password=self.password_edit.text)
+        resp = TFSegmentationServ(None).authenticate_user(mail=self.email_edit.text, password=self.password_edit.text)
         if resp.json()["is_authenticated"]:
             self.mail = self.email_edit.text
-            self.password = self.email_edit.text
+            self.password = self.password_edit.text
+            self.SID = resp.json()["sid"]
+            self.info_label.setText("Connected")
             self.hide()
-        else :
+            if self.remember_check.checkState():
+                self.saveAccount()
+
+        else:
             self.info_label.setText("Unable to Log In, please check your mail and password")
 
+    def saveAccount(self):
+        data = {
+            'mail': self.mail,
+            'password': self.password
+        }
+
+        with open('config.bin', 'wb') as f:
+            pickle.dump(data, f)
+
+
+    def readAccount(self):
+        try:
+            with open('config.bin', 'rb') as f:
+                data = pickle.load(f)
+                self.mail = data["mail"]
+                self.password = data["password"]
+            self.password_edit.setText(self.password)
+            self.email_edit.setText(self.mail)
+
+        except Exception as e:
+            return None
 
 class TFComputation():
     def __init__(self):
         self.model = None
 
-    def getTFversion(self):
-        from tensorflow import __version__ as TFversion
-        return TFversion
-
-    def loadModel(self, modelPath):
+    def __loadModel(self, modelPath):
         # import tensorflow as tf
         from tensorflow.keras.models import load_model
         from tensorflow.keras.losses import BinaryCrossentropy
@@ -825,16 +912,61 @@ class TFComputation():
         # compile model with substitute optimizer, loss and metrics.
         self.model.compile(optimizer='Adam', loss=BinaryCrossentropy(), metrics=['accuracy'])
 
+
+    def __preProcessing(self, InputVolumeAsArray, model_2D_input_size,  autoResize=True, autoRescale=True, rescaleScale=None):
+        # Pre-processing
+        from tensorflow.keras.layers import Resizing
+        resizeProcess = Resizing(model_2D_input_size[0], model_2D_input_size[1])
+        preprocessedInputArray = []
+        for img in InputVolumeAsArray:
+            expandedImg = np.expand_dims(img, axis=2)
+
+            # Resizing array if selected
+            if autoResize: resizedImg = resizeProcess(expandedImg)
+            else: resizedImg = expandedImg
+
+            # Rescaling values if selected
+            if autoRescale: rescaledImg = self.__autoRescaleImg(resizedImg, rescaleScale)
+            else: rescaledImg = resizedImg
+
+            preprocessedInputArray.append(rescaledImg)
+        preprocessedInputArray = np.array(preprocessedInputArray)
+
+        return preprocessedInputArray
+
+
+    def __autoRescaleIm(self, input_img, scale):
+        import tensorflow as tf
+        if scale is None or scale.startswith("[0,1]"):
+            rescale = tf.keras.layers.Rescaling(1. / tf.reduce_max(input_img))
+            return rescale(input_img)
+        elif scale.startswith("[-1,1]"):
+            rescale = tf.keras.layers.Rescaling(2. / tf.reduce_max(input_img), offset=-1)
+            return rescale(input_img)
+
+
+    def __autoRescaleImg(self, input_img, scale):
+        if scale is None or scale.startswith("[0,1]"):
+            return input_img/np.max(input_img)
+        elif scale.startswith("[-1,1]"):
+            return 2*(input_img/np.max(input_img))-1
+
+
     def compute(self, model_path, method, InputVolumeAsArray, autoResize, autoRescale, rescaleScale):
-        self.loadModel(model_path)
+
+        if not model_path.endswith("h5"):
+            slicer.util.errorDisplay("Unable to load model. Please use .h5 for local processing")
+            return None
+
+        self.__loadModel(model_path)
         InputVolumeShape = InputVolumeAsArray.shape
         InputModelShape = self.model.inputs[0].shape.as_list()[1:]  # first dim is None
 
         # Pre-processing
-        preprocessedInputArray = self.preProcessing(InputVolumeAsArray, InputModelShape, autoResize, autoRescale,
+        preprocessedInputArray = self.__preProcessing(InputVolumeAsArray, InputModelShape, autoResize, autoRescale,
                                                     rescaleScale)
         inputs = preprocessedInputArray
-        if method=="2.5D RGB":
+        if method == "2.5D RGB":
             # Converting Grayscale to RVB
             inputs = np.zeros((len(preprocessedInputArray), InputModelShape[0], InputModelShape[1], 3))
             for j in range(len(preprocessedInputArray)):
@@ -859,38 +991,6 @@ class TFComputation():
         return result
 
 
-    def preProcessing(self, InputVolumeAsArray, model_2D_input_size,  autoResize=True, autoRescale=True, rescaleScale=None):
-        # Pre-processing
-        from tensorflow.keras.layers import Resizing
-        resizeProcess = Resizing(model_2D_input_size[0], model_2D_input_size[1])
-        preprocessedInputArray = []
-        for img in InputVolumeAsArray:
-            expandedImg = np.expand_dims(img, axis=2)
-
-            # Resizing array if selected
-            if autoResize: resizedImg = resizeProcess(expandedImg)
-            else: resizedImg = expandedImg
-
-            # Rescaling values if selected
-            if autoRescale: rescaledImg = self.autoRescaleImg(resizedImg, rescaleScale)
-            else: rescaledImg = resizedImg
-
-            preprocessedInputArray.append(rescaledImg)
-        preprocessedInputArray = np.array(preprocessedInputArray)
-
-        return preprocessedInputArray
-
-
-    def autoRescaleImg(self, input_img, scale):
-        import tensorflow as tf
-        if scale is None or scale.startswith("[0,1]"):
-            rescale = tf.keras.layers.Rescaling(1. / tf.reduce_max(input_img))
-            return rescale(input_img)
-        elif scale.startswith("[-1,1]"):
-            rescale = tf.keras.layers.Rescaling(2. / tf.reduce_max(input_img), offset=-1)
-            return rescale(input_img)
-
-
     def getIdealProcessingMethod(self):
         """
         returns a label containing the ideal processing method based on volume input shape and model input shape
@@ -912,11 +1012,19 @@ class TFComputation():
 
         return None
 
-class TFSegmentationServ():
-    def __init__(self):
-        self.url = r"https://slicertensorflow.eu.pythonanywhere.com"
 
-    def authenticate_user(self, mail:str, password:str) -> bool:
+    def getTFversion(self):
+        from tensorflow import __version__ as TFversion
+        return TFversion
+
+class TFSegmentationServ(QWidget):
+    def __init__(self, auth):
+        super().__init__()
+        self.url = r"https://slicertensorflow.eu.pythonanywhere.com"
+        self.rid = 1
+        self.auth = auth
+
+    def authenticate_user(self, mail: str, password: str) -> bool:
         user = {"mail": mail, "password": password}
         r = requests.post(self.url + '/auth/authenticate', json=user)
         return r
@@ -924,10 +1032,121 @@ class TFSegmentationServ():
     def change_password(self, mail: str)->str:
         ...
 
-    def create_account(self, mail: str, password: str)->bool:
+    def create_account(self, mail: str, password: str) -> bool:
         user = {"mail": mail, "password": password}
         r = requests.post(self.url + '/auth/adduser', json=user)
         return r
 
+    def compute(self, model_path, method, InputVolumeAsArray, autoResize, autoRescale, rescaleScale):
+        import requests
+        import time
+        import numpy as np
+        from io import BytesIO
+        import secrets
 
+        progressbar = createProgressDialog()
+        progressbar.setAutoClose(False)
+        self.updateProgressBar(progressbar, value=1, message="Reaching distant server")
+        url = r"https://slicertensorflow.eu.pythonanywhere.com"
+
+        # ------------------------------------------------------------------------------------------------
+        modelName = model_path.split('/')[-1]
+
+        if self.auth.SID is not None:
+            sid = self.auth.SID
+        else :
+            sid = secrets.token_hex(6)
+            self.auth.SID = sid
+
+        self.rid += 1
+        rid = str(self.rid)
+
+        send = {
+            "modelName": secure_filename(modelName),
+            "sid": sid,
+            "rid": rid
+        }
+
+        r = requests.get(url + "/front/ismodelneeded", data=send)
+        self.updateProgressBar(progressbar, value=3, message="Distant server reached")
+        # ------------------------------------------------------------------------------------------------
+
+        send = {
+            "method": method,
+            "autoResize": autoResize,
+            "autoRescale": autoRescale,
+            "rescaleScale": rescaleScale,
+            "modelName": modelName,
+            "modelNeeded": r.json()["model_needed"],
+            "sid": sid,
+            "rid": rid
+        }
+
+        # Creates files
+        input_buffer = BytesIO()
+        np.save(input_buffer, InputVolumeAsArray)
+        input_buffer.seek(0)
+
+        files = {
+            'inputs file': ("inputs.npy", input_buffer, 'application/octet')
+        }
+
+        if r.json()["model_needed"]:
+            with open(model_path, 'rb') as f:
+                model_content = f.read()
+            files["model file"] = ("model.h5", BytesIO(model_content), 'application/octet')
+
+        self.updateProgressBar(progressbar, value=10, message="Uploading files...")
+        r = requests.post(url + '/front/newcompute', data=send, files=files)
+        self.updateProgressBar(progressbar, value=15, message="Upload done")
+        progressbar.show()
+
+        # -----------------------------------------------------------------------------------------
+        output = None
+        r = requests.get(url + "/front/getprediction", data=send)
+        while not r.json()["predict"] and not r.json()["error"]=="True" and not progressbar.wasCanceled:
+            send = {
+                "sid": sid,
+                "rid": rid
+            }
+            r = requests.get(url + "/front/getprediction", data=send)
+            if r.json()["message"].startswith("Sending"):
+                self.updateProgressBar(progressbar, value=16, message=r.json()["message"])
+            if r.json()["message"].startswith("Preprocessing"):
+                self.updateProgressBar(progressbar, value=18, message=r.json()["message"])
+            # updating value from computing message
+            if r.json()["message"].startswith("Processing"):
+                loading_value = r.json()["message"].split(' ')[-1].split('/')
+                value = 20 + float(loading_value[0])/float(loading_value[-1])*70
+                self.updateProgressBar(progressbar, value=value, message=r.json()["message"])
+                progressbar.show()
+            if r.json()["message"].startswith("Computing ended"):
+                self.updateProgressBar(progressbar, value=95, message=r.json()["message"])
+
+            if r.json()["predict"]:
+                self.updateProgressBar(progressbar, value=98, message=r.json()["message"])
+                output_bytes = requests.get(url + "/front/getoutput", data=send)
+                bytes_io = BytesIO(output_bytes.content)
+                output = np.load(bytes_io, allow_pickle=True)
+            else:
+                time.sleep(0.5)
+
+        if not r.json()["error"] == "True":
+            progressbar.setAutoClose(True)
+            self.updateProgressBar(progressbar, value=100, message="Received results")
+        else:
+            self.updateProgressBar(progressbar, value=99, message=r.json()["message"])
+
+        return output
+
+    def updateProgressBar(self, progressBar, value: int, message: str) -> None:
+        progressBar.setLabelText(message)
+        progressBar.value = value
+        QApplication.processEvents()
+
+    def getTFversion(self):
+        if self.auth.isAuthentified:
+            return 'Connected'
+        else:
+            return 'tensorflow 2.15.0'
 
