@@ -26,7 +26,7 @@ To install the extension :
 _To go deeper into what this extension can do, please report to the Examples folder where you can learn step by step how to use your first tensorflow model with a prostate segmentation model_
 
 The extension menu is divided into 5 panels.<br />
-![extensionMenu](https://github.com/VincentMillotMaysounabe/Slicer-TensorFlow/assets/114880539/e6a991e0-1084-47a4-9321-16e04db945a2)
+![TFSegmentation](https://github.com/VincentMillotMaysounabe/Slicer-TensorFlow/assets/114880539/4cde2eb3-a369-4665-a585-94d1b6973d1f)
 
 0 - Processing Type : Local requires a tensorflow installation and will be the kickest to compute (only *.h5 files). Distant doesn't need TensorFlow by sending model and inputs into a Raspeberry Pi to perform the computation, it requires an internet connexion and will be slower (both *.tflite and .*h5 files). <br /><br />
 1 - TensorFlow version : checks if tensorflow is available on the device. If not, the user can click "install" to pip install tensorflow (this operation can take some time). When a tensorflow is discovered, the version is displayed and the install button is unenabled.<br /> If TensorFlow version cannot be found after installation, you can try to directly install it through a pip install in slicer's python console (import pip, pip.main(["install", "tensorflow"]) <br /><br />
